@@ -1,0 +1,89 @@
+{
+    "description": "This file contains an example of how to define layers and their categories.  Categories not listed here are igrnored and not included in the output.",
+    "groups": [
+        {
+            "name": "driving",
+            "default color": [
+                155,
+                155,
+                155
+            ],
+            "elements": [
+                {
+                    "element": "driving",
+                    "color": [
+                        255,
+                        0,
+                        0
+                    ]
+                },
+                {
+                    "element": "bi-directional",
+                    "color": [
+                        255,
+                        0,
+                        0
+                    ]
+                },
+                {
+                    "element": "shoulder",
+                    "color": [
+                        0,
+                        255,
+                        0
+                    ]
+                },
+                {
+                    "element": "parking",
+                    "color": [
+                        0,
+                        255,
+                        0
+                    ]
+                },
+                {
+                    "element": "crosswalk",
+                    "color": [
+                        0,
+                        0,
+                        255
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "pedestrian",
+            "default color": [
+                255,
+                255,
+                255
+            ],
+            "elements": [
+                {
+                    "element": "sidewalk",
+                    "color": [
+                        255,
+                        0,
+                        0
+                    ]
+                },
+                {
+                    "element": "crosswalk",
+                    "color": [
+                        0,
+                        255,
+                        0
+                    ]
+                },
+                {
+                    "element": "shoulder",
+                    "color": [
+                        0,
+                        0,
+                        255
+                    ]
+                }
+            ]
+        }
+    ]
+}
