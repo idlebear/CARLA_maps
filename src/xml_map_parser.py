@@ -500,21 +500,25 @@ def main():
         img = render(polygons, road_types, group_name, groups, map_origin, map_width, map_height, MAP_RESOLUTION)
         # write the map to a file
 
+        # convert the image format to 3 x X x Y
+        np_img = img.transpose(2, 0, 1)
         filename = os.path.join(args.output, f"{prefix}{args.town}_{group_name}_map.npy")
-        np.save(filename, img)
+        np.save(filename, np_img)
+
         if not args.no_render:
             filename = os.path.join(args.output, f"{prefix}{args.town}_{group_name}_map.png")
             cv2.imwrite(filename, img)
-        parameters = {
-            "town": args.town,
-            "map_origin": map_origin,
-            "map_width": map_width,
-            "map_height": map_height,
-            "map_resolution": MAP_RESOLUTION,
-        }
 
     # write the map parameters to a file
-    with open(os.path.join(args.output, f"{prefix}{args.town}_map_parameters.txt"), "w") as f:
+    parameters = {
+        "town": args.town,
+        "prefix": args.prefix,
+        "map_origin": map_origin,
+        "map_width": map_width,
+        "map_height": map_height,
+        "map_resolution": MAP_RESOLUTION,
+    }
+    with open(os.path.join(args.output, f"{prefix}{args.town}_map_parameters.json"), "w") as f:
         json.dump(parameters, f)
 
     print("done")
