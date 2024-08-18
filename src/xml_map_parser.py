@@ -18,6 +18,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="OpenDRIVE File Loader")
 
     # Carla parameters
+    parser.add_argument("--no-load", action="store_true", help="Render the current CARLA map instead of forcing a reload")
     parser.add_argument("--town", type=str, default="Town03", help="CARLA town name to map")
     parser.add_argument("--host", type=str, default="localhost", help="CARLA server IP address")
     parser.add_argument("--port", type=int, default=2000, help="CARLA server port number")
@@ -26,7 +27,7 @@ def parse_arguments():
     # Output parameters
     parser.add_argument("--prefix", type=str, default=None, help="Prefix on the output files")
     parser.add_argument("--output", type=str, default=".", help="Output directory for the generated files")
-    parser.add_argument("--no_render", action="store_true", help="Do not render the map.  Numpy arrays will still be saved.")
+    parser.add_argument("--no-render", action="store_true", help="Do not render the map.  Numpy arrays will still be saved.")
     parser.add_argument("--groups", type=str, default="groups.json", help="JSON file with group definitions")
 
     # XODR parameters
@@ -427,8 +428,10 @@ def main():
         # Connect to the CARLA server and download the map
         client = carla.Client(args.host, args.port)
         client.set_timeout(args.timeout)
-        world = client.load_world(args.town)
-        carla_map = world.get_map()
+        if not args.no_load:
+            world = client.load_world(args.town)
+        else:
+            carla_map = world.get_map()
         map_data = carla_map.to_opendrive()
 
         # write the map data to a file for reference
@@ -509,8 +512,10 @@ def main():
             "map_height": map_height,
             "map_resolution": MAP_RESOLUTION,
         }
-        with open(os.path.join(args.output, f"{prefix}{args.town}_{group_name}_map_parameters.txt"), "w") as f:
-            json.dump(parameters, f)
+
+    # write the map parameters to a file
+    with open(os.path.join(args.output, f"{prefix}{args.town}_map_parameters.txt"), "w") as f:
+        json.dump(parameters, f)
 
     print("done")
 
