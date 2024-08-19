@@ -1,1 +1,0 @@
-{"town": "Town03", "map_origin": [-336.2298959378467, -314.80478048269765], "map_width": 6924, "map_height": 6750, "map_resolution": 0.1}

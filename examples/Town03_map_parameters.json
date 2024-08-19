@@ -1,0 +1,15 @@
+{
+  "town": "Town03",
+  "prefix": null,
+  "map_origin": [
+    -336.2298959378467,
+    -314.80478048269765
+  ],
+  "map_width": 1384,
+  "map_height": 1350,
+  "map_resolution": 0.5,
+  "groups": [
+    "VEHICLE",
+    "PEDESTRIAN"
+  ]
+}
