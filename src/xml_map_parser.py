@@ -493,7 +493,7 @@ def main():
     for group_name in groups.get_group_names():
 
         num_layers = groups.get_num_layers(group_name)
-        map_data = np.zeros( [num_layers, map_width, map_height], dtype=np.uint8 )
+        map_data = np.zeros( [num_layers, map_height, map_width], dtype=np.uint8 )
 
         for index, layer in enumerate(groups.get_layers(group_name)):
             render(map_data[index,...], polygons, road_types, layer["elements"], map_origin, args.resolution)
