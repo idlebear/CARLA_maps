@@ -28,51 +28,34 @@ class GroupData:
         for group in groups_data:
             group_name = group["name"]
             try:
-                default_color = group["default color"]
+                groups[group_name] = group["layers"]
             except KeyError:
-                default_color = (255, 255, 255)
-
-            elements = {}
-            try:
-                elements_data = group["elements"]
-            except KeyError:
-                print(f"No elements found in the group: {group_name}")
+                print(f"No layers found in the group: {group_name}")
                 continue
-
-            for element in elements_data:
-                try:
-                    element_name = element["element"]
-                except KeyError:
-                    print(f"Badly formed 'element' name found in the group: {group_name}")
-                    continue
-
-                try:
-                    element_color = element["color"]
-                except KeyError:
-                    element_color = default_color
-
-                elements[element_name] = element_color
-
-            groups[group_name] = elements
 
         return groups
 
     def get_group_names(self):
-        return self.groups.keys()
+        return [ k for k in self.groups.keys() ]
 
-    def lookup_element( self, group_name, element ):
+    def get_num_layers(self, group_name):
         '''
-        Look up the color of an element in a group.  If the element is not found, return None
+        Allocate an array of the same size as the number of layers in the group
         '''
         if self.groups is None:
             return None
 
-        try:
-            color = self.groups[group_name][element]
-        except KeyError:
+        return len(self.groups[group_name])
+
+    def get_layers(self, group_name):
+        '''
+        Return the layers in a group
+        '''
+        if self.groups is None:
             return None
 
-        return color
+        return self.groups[group_name]
+
 
 if __name__ == "__main__":
     layers_file = 'groups.json'

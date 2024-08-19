@@ -31,7 +31,7 @@ def parse_arguments():
     parser.add_argument("--groups", type=str, default="groups.json", help="JSON file with group definitions")
 
     # XODR parameters
-    parser.add_argument("--resolution", type=float, default=0.1, help="Resolution of the generated map")
+    parser.add_argument("--resolution", type=float, default=MAP_RESOLUTION,  help="Resolution of the generated map")
     parser.add_argument("--xodr", type=str, default=None, help="XODR file to load (instead of connecting to CARLA)")
 
     args = parser.parse_args()
@@ -383,6 +383,8 @@ def construct_object_polygons(road):
         center_x = np.interp(s, geometry[:, 0], geometry[:, 1]) + object["t"] * np.cos(object["heading"] + np.pi / 2)
         center_y = np.interp(s, geometry[:, 0], geometry[:, 2]) + object["t"] * np.sin(object["heading"] + np.pi / 2)
 
+        orientation = object["orientation"]
+
         heading = np.interp(s, geometry[:, 0], geometry[:, 3]) + object["heading"]
 
         # rotate the object outline to match the road heading
@@ -397,19 +399,12 @@ def construct_object_polygons(road):
 
     return polygons, road_types
 
-def render( polygons, road_types, group_name, groups, map_origin, map_width, map_height, map_resolution):
-
-    image_width = map_width
-    image_height = map_height
-
-    # create a blank image
-    img = np.zeros((image_height, image_width, 3), np.uint8)
+def render( img, polygons, road_types, elements, map_origin, map_resolution):
 
     for poly, road_type in zip(polygons, road_types):
-        colour = groups.lookup_element(group_name, road_type)
-        if colour is not None:
-            points = np.array([real_to_pixel(x, y, map_origin, MAP_RESOLUTION) for x, y in poly], dtype=np.int32)
-            cv2.fillPoly(img, [points], color=colour)
+        if road_type in elements:
+            points = np.array([real_to_pixel(x, y, map_origin, map_resolution) for x, y in poly], dtype=np.int32)
+            cv2.fillPoly(img, [points], color=255)
 
     return img
 
@@ -430,8 +425,7 @@ def main():
         client.set_timeout(args.timeout)
         if not args.no_load:
             world = client.load_world(args.town)
-        else:
-            carla_map = world.get_map()
+        carla_map = world.get_map()
         map_data = carla_map.to_opendrive()
 
         # write the map data to a file for reference
@@ -470,13 +464,13 @@ def main():
     print(f"Map bounds: ({min_x}, {min_y}) to ({max_x}, {max_y})")
     map_origin = [min_x - MAP_MARGIN, min_y - MAP_MARGIN]
 
-    map_width = int((max_x - min_x + 2 * MAP_MARGIN) / MAP_RESOLUTION)
-    map_height = int((max_y - min_y + 2 * MAP_MARGIN) / MAP_RESOLUTION)
+    map_width = int((max_x - min_x + 2 * MAP_MARGIN) / args.resolution)
+    map_height = int((max_y - min_y + 2 * MAP_MARGIN) / args.resolution)
 
     # # draw the roads
     # centers_img = np.zeros((map_height, map_width, 3), np.uint8)
     # for road in roads:
-    #     draw_road_polyline(centers_img, road["geometry"], map_origin, MAP_RESOLUTION)
+    #     draw_road_polyline(centers_img, road["geometry"], map_origin, args.resolution)
 
     # consruct the road polygons
     polygons = []
@@ -497,15 +491,23 @@ def main():
 
     # render the map
     for group_name in groups.get_group_names():
-        img = render(polygons, road_types, group_name, groups, map_origin, map_width, map_height, MAP_RESOLUTION)
+
+        num_layers = groups.get_num_layers(group_name)
+        map_data = np.zeros( [num_layers, map_width, map_height], dtype=np.uint8 )
+
+        for index, layer in enumerate(groups.get_layers(group_name)):
+            render(map_data[index,...], polygons, road_types, layer["elements"], map_origin, args.resolution)
+
         # write the map to a file
 
-        # convert the image format to 3 x X x Y
-        np_img = img.transpose(2, 0, 1)
+        # convert the image format to 3 x X x Y - note the transpose of the X,Y from Y,X image format
+        np_img = map_data.transpose(0, 2, 1)
         filename = os.path.join(args.output, f"{prefix}{args.town}_{group_name}_map.npy")
         np.save(filename, np_img)
 
         if not args.no_render:
+            # write out the first three layers as an image
+            img = map_data[:3,...].transpose(1, 2, 0)
             filename = os.path.join(args.output, f"{prefix}{args.town}_{group_name}_map.png")
             cv2.imwrite(filename, img)
 
@@ -516,10 +518,11 @@ def main():
         "map_origin": map_origin,
         "map_width": map_width,
         "map_height": map_height,
-        "map_resolution": MAP_RESOLUTION,
+        "map_resolution": args.resolution,
+        "groups": groups.get_group_names(),
     }
     with open(os.path.join(args.output, f"{prefix}{args.town}_map_parameters.json"), "w") as f:
-        json.dump(parameters, f)
+        json.dump(parameters, f, indent=2)
 
     print("done")
 

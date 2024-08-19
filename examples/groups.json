@@ -2,85 +2,50 @@
     "description": "This file contains an example of how to define layers and their categories.  Categories not listed here are igrnored and not included in the output.",
     "groups": [
         {
-            "name": "driving",
-            "default color": [
-                155,
-                155,
-                155
-            ],
-            "elements": [
+            "name": "VEHICLE",
+            "layers": [
                 {
-                    "element": "driving",
-                    "color": [
-                        255,
-                        0,
-                        0
+                    "name": "DRIVING_1",
+                    "elements": [
+                        "driving",
+                        "bi-directional"
                     ]
                 },
                 {
-                    "element": "bi-directional",
-                    "color": [
-                        255,
-                        0,
-                        0
+                    "name": "DRIVING_2",
+                    "elements": [
+                        "shoulder",
+                        "parking"
                     ]
                 },
                 {
-                    "element": "shoulder",
-                    "color": [
-                        0,
-                        255,
-                        0
-                    ]
-                },
-                {
-                    "element": "parking",
-                    "color": [
-                        0,
-                        255,
-                        0
-                    ]
-                },
-                {
-                    "element": "crosswalk",
-                    "color": [
-                        0,
-                        0,
-                        255
+                    "name": "DRIVING_3",
+                    "elements": [
+                        "crosswalk"
                     ]
                 }
             ]
         },
         {
-            "name": "pedestrian",
-            "default color": [
-                255,
-                255,
-                255
-            ],
-            "elements": [
+            "name": "PEDESTRIAN",
+            "layers": [
                 {
-                    "element": "sidewalk",
-                    "color": [
-                        255,
-                        0,
-                        0
+                    "name": "PEDESTRIAN_1",
+                    "elements": [
+                        "sidewalk"
                     ]
                 },
                 {
-                    "element": "crosswalk",
-                    "color": [
-                        0,
-                        255,
-                        0
+                    "name": "PEDESTRIAN_2",
+                    "elements": [
+                        "shoulder",
+                        "parking"
                     ]
                 },
                 {
-                    "element": "shoulder",
-                    "color": [
-                        0,
-                        0,
-                        255
+                    "name": "PEDESTRIAN_3",
+                    "elements": [
+                        "crosswalk"
                     ]
                 }
             ]
