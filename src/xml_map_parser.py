@@ -14,11 +14,14 @@ from groups import GroupData
 MAP_MARGIN = 50.0
 MAP_RESOLUTION = 0.1
 
+
 def parse_arguments():
     parser = argparse.ArgumentParser(description="OpenDRIVE File Loader")
 
     # Carla parameters
-    parser.add_argument("--no-load", action="store_true", help="Render the current CARLA map instead of forcing a reload")
+    parser.add_argument(
+        "--no-load", action="store_true", help="Render the current CARLA map instead of forcing a reload"
+    )
     parser.add_argument("--town", type=str, default="Town03", help="CARLA town name to map")
     parser.add_argument("--host", type=str, default="localhost", help="CARLA server IP address")
     parser.add_argument("--port", type=int, default=2000, help="CARLA server port number")
@@ -27,11 +30,13 @@ def parse_arguments():
     # Output parameters
     parser.add_argument("--prefix", type=str, default=None, help="Prefix on the output files")
     parser.add_argument("--output", type=str, default=".", help="Output directory for the generated files")
-    parser.add_argument("--no-render", action="store_true", help="Do not render the map.  Numpy arrays will still be saved.")
+    parser.add_argument(
+        "--no-render", action="store_true", help="Do not render the map.  Numpy arrays will still be saved."
+    )
     parser.add_argument("--groups", type=str, default="groups.json", help="JSON file with group definitions")
 
     # XODR parameters
-    parser.add_argument("--resolution", type=float, default=MAP_RESOLUTION,  help="Resolution of the generated map")
+    parser.add_argument("--resolution", type=float, default=MAP_RESOLUTION, help="Resolution of the generated map")
     parser.add_argument("--xodr", type=str, default=None, help="XODR file to load (instead of connecting to CARLA)")
 
     args = parser.parse_args()
@@ -286,7 +291,7 @@ def construct_polygon_array(road, side="left"):
                 if offset_index == len(offsets) - 1:
                     break
 
-        ds = (s - s_0)
+        ds = s - s_0
         offset = (
             offsets[offset_index, 1]
             + offsets[offset_index, 2] * ds
@@ -312,7 +317,7 @@ def construct_polygon_array(road, side="left"):
         for lane_index, lane in enumerate(lanes):
             outer_lane_edge = np.zeros_like(inner_lane_edge)
 
-            for index in range(geometry_start_index, len(geometry)+1):
+            for index in range(geometry_start_index, len(geometry) + 1):
                 if index == len(geometry):
                     break
 
@@ -335,7 +340,7 @@ def construct_polygon_array(road, side="left"):
                         if width_index == len(widths) - 1:
                             break
 
-                ds = (s - widths[width_index, 0])
+                ds = s - widths[width_index, 0]
                 width = (
                     widths[width_index, 1]
                     + widths[width_index, 2] * ds
@@ -364,7 +369,7 @@ def construct_polygon_array(road, side="left"):
             inner_lane_edge = outer_lane_edge
 
         # move the geometry start index to the next lane section
-        geometry_start_index = index-1
+        geometry_start_index = index - 1
 
     return polygons, road_types
 
@@ -399,7 +404,8 @@ def construct_object_polygons(road):
 
     return polygons, road_types
 
-def render( img, polygons, road_types, elements, map_origin, map_resolution):
+
+def render(img, polygons, road_types, elements, map_origin, map_resolution):
 
     for poly, road_type in zip(polygons, road_types):
         if road_type in elements:
@@ -461,11 +467,10 @@ def main():
     min_x, min_y = np.min(np.array(mins), axis=0)
     max_x, max_y = np.max(np.array(maxs), axis=0)
 
-    print(f"Map bounds: ({min_x}, {min_y}) to ({max_x}, {max_y})")
-    map_origin = [min_x - MAP_MARGIN, min_y - MAP_MARGIN]
-
     map_width = int((max_x - min_x + 2 * MAP_MARGIN) / args.resolution)
     map_height = int((max_y - min_y + 2 * MAP_MARGIN) / args.resolution)
+
+    map_origin = [min_x - MAP_MARGIN, min_y - MAP_MARGIN]
 
     # # draw the roads
     # centers_img = np.zeros((map_height, map_width, 3), np.uint8)
@@ -477,11 +482,11 @@ def main():
     road_types = []
     for road in roads:
 
-        left_polys, left_types = construct_polygon_array( road=road, side="left" )
+        left_polys, left_types = construct_polygon_array(road=road, side="left")
         polygons.extend(left_polys)
         road_types.extend(left_types)
 
-        right_polys, right_types = construct_polygon_array( road=road, side="right" )
+        right_polys, right_types = construct_polygon_array(road=road, side="right")
         polygons.extend(right_polys)
         road_types.extend(right_types)
 
@@ -493,25 +498,37 @@ def main():
     for group_name in groups.get_group_names():
 
         num_layers = groups.get_num_layers(group_name)
-        map_data = np.zeros( [num_layers, map_height, map_width], dtype=np.uint8 )
+        map_data = np.zeros([num_layers, map_height, map_width], dtype=np.uint8)
 
         for index, layer in enumerate(groups.get_layers(group_name)):
-            render(map_data[index,...], polygons, road_types, layer["elements"], map_origin, args.resolution)
+            render(map_data[index, ...], polygons, road_types, layer["elements"], map_origin, args.resolution)
 
         # write the map to a file
 
-        # convert the image format to 3 x X x Y - note the transpose of the X,Y from Y,X image format
+        # flip the map to match the reversed Carla coordinate system
+        map_data = np.flip(map_data, axis=1)
+
+        # convert the image format to 3 x X x Y - note the transpose to the X,Y from Y,X image format
         np_img = map_data.transpose(0, 2, 1)
         filename = os.path.join(args.output, f"{prefix}{args.town}_{group_name}_map.npy")
         np.save(filename, np_img)
 
         if not args.no_render:
             # write out the first three layers as an image
-            img = map_data[:3,...].transpose(1, 2, 0)
+            img = map_data[:3, ...].transpose(1, 2, 0)
             filename = os.path.join(args.output, f"{prefix}{args.town}_{group_name}_map.png")
             cv2.imwrite(filename, img)
 
     # write the map parameters to a file
+    # swap the map width and height to match numpy array format
+    map_width, map_height = map_height, map_width
+
+    # CARLA uses a left-handed coordinate system - flip the y values and
+    # when we write the map, we will flip the image as well
+    min_y, max_y = -max_y, -min_y
+    print(f"Map bounds: ({min_x}, {min_y}) to ({max_x}, {max_y})")
+    map_origin = [min_x - MAP_MARGIN, min_y - MAP_MARGIN]
+
     parameters = {
         "town": args.town,
         "prefix": args.prefix,
