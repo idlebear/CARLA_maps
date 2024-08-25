@@ -111,11 +111,15 @@ def parse_lanes(road):
             widths.append(width)
         widths = np.array(widths)
 
+        predecessor, successor = get_lane_connections(lane)
+
         lane_dict = {
             "id": id,
             "type": type,
             "level": level,
             "widths": widths,
+            "predecessor": predecessor,
+            "successor": successor,
         }
 
         return lane_dict
@@ -165,7 +169,6 @@ def parse_objects(road):
         ob_type = object_data.get("type")
         if ob_type == "crosswalk":
             s = float(object_data.get("s"))
-
             t = float(object_data.get("t"))
             heading = float(object_data.get("hdg"))
             length = float(object_data.get("length"))
@@ -202,18 +205,19 @@ def real_to_pixel(x, y, origin, resolution):
     return [int((x - origin[0]) / resolution), int((y - origin[1]) / resolution)]
 
 
-def line_road_to_polyline(geometry):
+def line_road_to_polyline(geometry, resolution=0.01):
     x1 = float(geometry.get("x"))
     y1 = float(geometry.get("y"))
     s = float(geometry.get("s"))
     heading = float(geometry.get("hdg"))
     length = float(geometry.get("length"))
+    num_points = max( int(length / resolution), 10)  # at least 10 points
 
     x2 = x1 + (length) * np.cos(heading)
     y2 = y1 + (length) * np.sin(heading)
 
-    xs = np.linspace(x1, x2, 500, endpoint=True)
-    ys = np.linspace(y1, y2, 500, endpoint=True)
+    xs = np.linspace(x1, x2, num_points, endpoint=True)
+    ys = np.linspace(y1, y2, num_points, endpoint=True)
     headings = np.full_like(xs, heading)
 
     dx = xs[1:] - xs[:-1]
@@ -227,12 +231,13 @@ def line_road_to_polyline(geometry):
     return points
 
 
-def arc_road_to_polyline(geometry, curvature):
+def arc_road_to_polyline(geometry, curvature, resolution=0.01):
     x = float(geometry.get("x"))
     y = float(geometry.get("y"))
     s = float(geometry.get("s"))
     heading = float(geometry.get("hdg"))
     length = float(geometry.get("length"))
+    num_points = max( int(length / resolution), 10)  # at least 10 points
 
     # calculate arc parameters
     side = np.sign(curvature)
@@ -243,7 +248,7 @@ def arc_road_to_polyline(geometry, curvature):
     center_x = x + radius * np.cos(heading + np.pi / 2) * side
     center_y = y + radius * np.sin(heading + np.pi / 2) * side
 
-    t = np.linspace(0, angle, 500)
+    t = np.linspace(0, angle, num_points, endpoint=True)
     headings = heading + t * side
     angles = headings - np.pi / 2 * side
     xs = center_x + radius * np.cos(angles)
@@ -260,22 +265,65 @@ def arc_road_to_polyline(geometry, curvature):
     return points
 
 
-def draw_road_polyline(img, points, origin, resolution):
-    polyline = np.array([real_to_pixel(x, y, origin, resolution) for _, x, y, _ in points], dtype=np.int32).reshape(
+def draw_road_polyline(img, points, origin, resolution, colour=(255, 255, 255)):
+    polyline = np.array([real_to_pixel(x, y, origin, resolution) for x, y in points], dtype=np.int32).reshape(
         -1, 1, 2
     )
-    cv2.polylines(img, [polyline], isClosed=False, color=(255, 255, 255), thickness=3)
+    cv2.polylines(img, [polyline], isClosed=False, color=colour, thickness=2)
 
 
-def construct_polygon_array(road, side="left"):
+def get_road_connections(road):
+    link_data = road.find("link")
+    if link_data is None:
+        return None, None
+
+    predecessor_data = link_data.find("predecessor")
+    predecessor = None
+    if predecessor_data is not None:
+        if predecessor_data.get("elementType") == "road":
+            contact_point = predecessor_data.get("contactPoint")
+            predecessor = f"{predecessor_data.get('elementId')}-{contact_point}"
+        else:  # junction
+            predecessor = int(predecessor_data.get('elementId'))
+
+    successor_data = link_data.find("successor")
+    successor = None
+    if successor_data is not None:
+        if successor_data.get("elementType") == "road":
+            contact_point = successor_data.get("contactPoint")
+            successor = f"{successor_data.get('elementId')}-{successor_data.get('contactPoint')}"
+        else:  # junction
+            contact_point = "end"
+            successor = int(successor_data.get('elementId'))
+
+    return predecessor, successor
+
+
+def get_lane_connections(road):
+    link_data = road.find("link")
+    if link_data is None:
+        return None, None
+
+    predecessor_data = link_data.find("predecessor")
+    if predecessor_data is not None:
+        predecessor = int(predecessor_data.get('id'))
+    else:
+        predecessor = None
+
+    successor_data = link_data.find("successor")
+    if successor_data is not None:
+        successor = int(successor_data.get('id'))
+    else:
+        successor = None
+
+    return predecessor, successor
+
+
+def construct_inner_lane_edge(road, side="left"):
     road_id = road["id"]
     geometry = road["geometry"]
     offsets = road["lanes"]["offsets"]
     lane_sections = road["lanes"]["lane_sections"]
-
-    sign = 1
-    if side == "right":
-        sign = -1
 
     # adjust the centerline
     center_line = np.zeros([len(geometry), 2])
@@ -301,20 +349,57 @@ def construct_polygon_array(road, side="left"):
         center_line[index, 0] = x + offset * np.cos(heading + np.pi / 2)
         center_line[index, 1] = y + offset * np.sin(heading + np.pi / 2)
 
-    polygons = []
-    road_types = []
+    return center_line
 
+
+def construct_lane_geometry(road, side="left"):
+    road_id = road["id"]
+
+    first_inner_edge = construct_inner_lane_edge(road, side)
+
+    left = construct_side_geometry(road, "left", first_inner_edge)
+    right = construct_side_geometry(road, "right", first_inner_edge)
+
+    for key, value in right.items():
+        if key in left:
+            left[key].update(value)
+        else:
+            left[key] = value
+
+    # parse the objects
+    objects = construct_object_geometry(road)
+
+    return objects, left
+
+
+def construct_side_geometry(road, side="left", first_inner_edge=None):
+    sign = 1
+    if side == "right":
+        sign = -1
+
+    geometry = road["geometry"]
+    lane_sections = road["lanes"]["lane_sections"]
+
+    lanes = {}
     geometry_start_index = 0
     for lane_section_index, lane_section in enumerate(lane_sections):
-        lanes = lane_section[1][side]
-        inner_lane_edge = center_line
+        lanes_data = lane_section[1][side]
+        if len(lanes_data) == 0:
+            continue
+
+        if lane_section_index not in lanes:
+            lanes[lane_section_index] = {}
+
+        inner_lane_edge = first_inner_edge
 
         # skip this section if the 's' value is already past the end
         if lane_section_index < len(lane_sections) - 1:
             if geometry[geometry_start_index][0] >= lane_sections[lane_section_index + 1][0]:
                 continue
 
-        for lane_index, lane in enumerate(lanes):
+        for lane_data in lanes_data:
+            id = int(lane_data["id"])
+
             outer_lane_edge = np.zeros_like(inner_lane_edge)
 
             for index in range(geometry_start_index, len(geometry) + 1):
@@ -331,7 +416,7 @@ def construct_polygon_array(road, side="left"):
                 heading = geometry[index][3]
 
                 width_index = 0
-                widths = lane["widths"]
+                widths = lane_data["widths"]
                 if width_index >= len(widths) - 1:
                     pass
                 else:
@@ -350,20 +435,28 @@ def construct_polygon_array(road, side="left"):
                 outer_lane_edge[index, 0] = inner_lane_edge[index, 0] + sign * width * np.cos(heading + np.pi / 2)
                 outer_lane_edge[index, 1] = inner_lane_edge[index, 1] + sign * width * np.sin(heading + np.pi / 2)
 
-            polygon = np.concatenate(
-                [
-                    inner_lane_edge[geometry_start_index:index, :],
-                    np.flip(outer_lane_edge[geometry_start_index:index, :], axis=0),
-                ],
-                axis=0,
-            )
-
-            if len(polygon) < 3:
-                print(f"Empty polygon: {road_id}, road_type: {lane['type']}")
+            if index - geometry_start_index < 2:
+                print(f"Empty lane: {road['id']}, road_type: {lane_data['type']}")
                 break
 
-            polygons.append(polygon)
-            road_types.append(lane["type"])
+            # find the centers between the inner and outer edges
+            centers = (
+                inner_lane_edge[geometry_start_index:index, :] + outer_lane_edge[geometry_start_index:index, :]
+            ) / 2
+
+            lanes[lane_section_index][id] = {
+                "polygon": np.concatenate(
+                    [
+                        inner_lane_edge[geometry_start_index:index, :],
+                        np.flip(outer_lane_edge[geometry_start_index:index, :], axis=0),
+                    ],
+                    axis=0,
+                ),
+                "centers": centers,
+                "road_type": lane_data["type"],
+                "predecessor": lane_data["predecessor"],
+                "successor": lane_data["successor"],
+            }
 
             # move the inner lane edge to the outer lane edge
             inner_lane_edge = outer_lane_edge
@@ -371,38 +464,51 @@ def construct_polygon_array(road, side="left"):
         # move the geometry start index to the next lane section
         geometry_start_index = index - 1
 
-    return polygons, road_types
+    return lanes
 
 
-def construct_object_polygons(road):
+def construct_object_geometry(road):
     geometry = road["geometry"]
-    objects = road["objects"]
+    objects_data = road["objects"]
 
-    polygons = []
-    road_types = []
-    for object in objects:
-        s = object["s"]
+    objects = {}
+    for object_data in objects_data:
+        s = object_data["s"]
+        t = object_data["t"]
+        heading = object_data["heading"]
+        # orientation = object_data["orientation"]
+        # width = object_data["width"]
+        length = object_data["length"]
 
         # TODO: This works for almost all crosswalks but does not account for the orientation which
         #       may be the reason for the occasional misalignment.  Good enough for now.
-        center_x = np.interp(s, geometry[:, 0], geometry[:, 1]) + object["t"] * np.cos(object["heading"] + np.pi / 2)
-        center_y = np.interp(s, geometry[:, 0], geometry[:, 2]) + object["t"] * np.sin(object["heading"] + np.pi / 2)
-
-        orientation = object["orientation"]
-
-        heading = np.interp(s, geometry[:, 0], geometry[:, 3]) + object["heading"]
+        road_heading = np.interp(s, geometry[:, 0], geometry[:, 3])
+        center_x = np.interp(s, geometry[:, 0], geometry[:, 1]) + t * np.cos(road_heading + np.pi / 2)
+        center_y = np.interp(s, geometry[:, 0], geometry[:, 2]) + t * np.sin(road_heading + np.pi / 2)
 
         # rotate the object outline to match the road heading
-        rotation_matrix = np.array([[np.cos(heading), -np.sin(heading)], [np.sin(heading), np.cos(heading)]])
-        corner_points = np.dot(rotation_matrix, np.array(object["outline"]).T).T
-
-        # calculate the corner points of the crosswalk
+        object_heading = road_heading + heading
+        rotation_matrix = np.array(
+            [[np.cos(object_heading), -np.sin(object_heading)], [np.sin(object_heading), np.cos(object_heading)]]
+        )
+        corner_points = np.dot(rotation_matrix, np.array(object_data["outline"]).T).T
         corner_points = corner_points + np.array([center_x, center_y])
 
-        polygons.append(corner_points)
-        road_types.append(object["type"])
+        # find the centerline points for the object
+        centers = np.array(
+            [
+                [center_x + 0.51 * length * np.cos(object_heading), center_y + 0.51 * length * np.sin(object_heading)],
+                [center_x - 0.51 * length * np.cos(object_heading), center_y - 0.51 * length * np.sin(object_heading)],
+            ]
+        )
 
-    return polygons, road_types
+        objects[object_data["id"]] = {
+            "polygon": corner_points,
+            "centers": centers,
+            "road_type": object_data["type"],
+        }
+
+    return objects
 
 
 def render(img, polygons, road_types, elements, map_origin, map_resolution):
@@ -413,6 +519,46 @@ def render(img, polygons, road_types, elements, map_origin, map_resolution):
             cv2.fillPoly(img, [points], color=255)
 
     return img
+
+
+def insert_road_link(road_links, from_id, to_id):
+    if from_id not in road_links:
+        road_links[from_id] = [to_id]
+    else:
+        if to_id not in road_links[from_id]:
+            road_links[from_id].append(to_id)
+    return road_links
+
+def get_crosswalk_links( road_map, categories, objects, threshold=1 ):
+    object_links = {}
+    for object_id, object in objects.items():
+        if object['road_type'] == 'crosswalk':
+            for road_id, lanes in road_map.items():
+                for lane_section_id, lane_section in lanes.items():
+                    for lane_id, lane in lane_section.items():
+                        if lane['road_type'] in categories:
+                            if np.linalg.norm(object['centers'][0] - lane['centers'][0]) < threshold:
+                                object_link_name = f"{object_id}-0"
+                                lane_link_name= f"{road_id}-0-{lane_id}"
+                                insert_road_link(object_links, object_link_name, lane_link_name)
+                                insert_road_link(object_links, lane_link_name, object_link_name)
+                            elif np.linalg.norm(object['centers'][0] - lane['centers'][-1]) < threshold:
+                                object_link_name = f"{object_id}-0"
+                                lane_link_name= f"{road_id}-{len(lane['centers'])-1}-{lane_id}"
+                                insert_road_link(object_links, object_link_name, lane_link_name)
+                                insert_road_link(object_links, lane_link_name, object_link_name)
+
+                            if np.linalg.norm(object['centers'][-1] - lane['centers'][0]) < threshold:
+                                object_link_name = f"{object_id}-{len(object['centers'])-1}"
+                                lane_link_name= f"{road_id}-0-{lane_id}"
+                                insert_road_link(object_links, object_link_name, lane_link_name)
+                                insert_road_link(object_links, lane_link_name, object_link_name)
+                            elif np.linalg.norm(object['centers'][-1] - lane['centers'][-1]) < threshold:
+                                object_link_name = f"{object_id}-{len(object['centers'])-1}"
+                                lane_link_name= f"{road_id}-{len(lane['centers'])-1}-{lane_id}"
+                                insert_road_link(object_links, object_link_name, lane_link_name)
+                                insert_road_link(object_links, lane_link_name, object_link_name)
+    return object_links
 
 
 def main():
@@ -445,11 +591,13 @@ def main():
     roads_data = root.findall("road")
 
     # Extract and print all subelements for each road element
-    roads = []
+    roads = {}
     mins = []
     maxs = []
     for road_data in roads_data:
         id = int(road_data.get("id"))
+
+        predecessor, successor = get_road_connections(road_data)
 
         name = road_data.get("name")
         length = float(road_data.get("length"))
@@ -461,8 +609,17 @@ def main():
         lanes = parse_lanes(road_data)
         objects = parse_objects(road_data)
 
-        road = {"id": id, "name": name, "length": length, "geometry": geometry, "lanes": lanes, "objects": objects}
-        roads.append(road)
+        road = {
+            "id": id,
+            "name": name,
+            "length": length,
+            "geometry": geometry,
+            "lanes": lanes,
+            "objects": objects,
+            "predecessor": predecessor,
+            "successor": successor,
+        }
+        roads[id] = road
 
     min_x, min_y = np.min(np.array(mins), axis=0)
     max_x, max_y = np.max(np.array(maxs), axis=0)
@@ -477,22 +634,101 @@ def main():
     # for road in roads:
     #     draw_road_polyline(centers_img, road["geometry"], map_origin, args.resolution)
 
-    # consruct the road polygons
+    # construct the road polygons
     polygons = []
     road_types = []
-    for road in roads:
 
-        left_polys, left_types = construct_polygon_array(road=road, side="left")
-        polygons.extend(left_polys)
-        road_types.extend(left_types)
+    road_map = {}
+    object_map = {}
+    forward_road_links = {}  # map of road-end-lane to road-end-lane connections
+    backward_road_links = {}  # map of road-end-lane to road-end-lane connections
 
-        right_polys, right_types = construct_polygon_array(road=road, side="right")
-        polygons.extend(right_polys)
-        road_types.extend(right_types)
+    for road_id, road in roads.items():
 
-        object_polys, object_types = construct_object_polygons(road)
-        polygons.extend(object_polys)
-        road_types.extend(object_types)
+        objects, lanes = construct_lane_geometry(road)
+        road_map[road_id] = lanes
+
+        for lane_section_id, lane_section in lanes.items():
+
+            for lane_id, lane in lane_section.items():
+                polygons.append(lane["polygon"])
+                road_types.append(lane["road_type"])
+
+                # build the road connections map
+                if lane["predecessor"] is not None:
+                    if not lane_section_id:
+                        if road["predecessor"] is not None:
+                            # there is a predecessor road and this is the first road section
+                            link_name = f"{road_id}-0-{lane_id}"
+                            insert_road_link(
+                                backward_road_links, link_name, f"{road['predecessor']}-{lane['predecessor']}"
+                            )
+                    else:
+                        link_name = f"{road_id}-0-{lane_id}-{lane_section_id}"
+                        insert_road_link(backward_road_links, link_name, f"{road_id}-{len(lane['centers'])-1}-{lane['predecessor']}-{lane_section_id-1}")
+
+                if lane["successor"] is not None:
+                    if lane_section_id == len(lanes) - 1:
+                        if road["successor"] is not None:
+                            # there is a successor road and this is the last road section
+                            link_name = f"{road_id}-{len(lane['centers'])-1}-{lane_id}"
+                            insert_road_link(forward_road_links, link_name, f"{road['successor']}-{lane['successor']}")
+                    else:
+                        link_name = f"{road_id}-{len(lane['centers'])-1}-{lane_id}-{lane_section_id}"
+                        insert_road_link(forward_road_links, link_name, f"{road_id}-0-{lane['successor']}-{lane_section_id+1}")
+
+        for object_id, object in objects.items():
+            object_map[object_id] = object
+            polygons.append(object["polygon"])
+            road_types.append(object["road_type"])
+
+    # draw the centerlines for 'sidewalk' roads and 'crosswalk' objects
+    centers_img = np.zeros((map_height, map_width, 3), np.uint8)
+    for road_id, lanes in road_map.items():
+        for lane_section_id, lane_section in lanes.items():
+            for lane_id, lane in lane_section.items():
+                if lane["road_type"] == "sidewalk":
+                    draw_road_polyline(centers_img, lane["centers"], map_origin, args.resolution)
+
+    for object_id, object in object_map.items():
+        if object["road_type"] == "crosswalk":
+            draw_road_polyline(centers_img, object["centers"], map_origin, args.resolution, colour=(0, 255, 0))
+
+    filename = os.path.join(args.output, f"{prefix}{args.town}_sidewalks.png")
+    cv2.imwrite(filename, centers_img)
+
+    # get the object links
+    object_links = get_crosswalk_links(road_map, ["sidewalk"], object_map, threshold=2.5)
+
+    # parse the junctions
+    junctions_data = root.findall("junction")
+    for junction_data in junctions_data:
+        junction_id = int(junction_data.get("id"))
+        if junction_id != 1820:
+            continue
+
+        connections_data = junction_data.findall("connection")
+        for connection_data in connections_data:
+            incoming_road = int(connection_data.get("incomingRoad"))
+            try:
+                road = roads[int(incoming_road)]
+            except KeyError:
+                continue
+
+            connecting_road = connection_data.get("connectingRoad")
+            contact_point = connection_data.get("contactPoint")
+
+            if road['predecessor'] == junction_id:
+                incoming_link = 'start'
+                link_dict = backward_road_links
+            else:
+                incoming_link = 'end'
+                link_dict = forward_road_links
+
+            for lane_link in connection_data.findall("laneLink"):
+                incoming_link_name = f"{incoming_road}-{incoming_link}-{lane_link.get('from')}"
+                connection_link_name = f"{connecting_road}-{contact_point}-{lane_link.get('to')}"
+                insert_road_link(link_dict, incoming_link_name, connection_link_name)  # forward
 
     # render the map
     for group_name in groups.get_group_names():
