@@ -8,6 +8,7 @@ import numpy as np
 import os
 from xml.dom.minidom import parse, parseString
 import xml.etree.ElementTree as ET
+import dill
 
 from groups import GroupData
 
@@ -205,7 +206,7 @@ def real_to_pixel(x, y, origin, resolution):
     return [int((x - origin[0]) / resolution), int((y - origin[1]) / resolution)]
 
 
-def line_road_to_polyline(geometry, resolution=0.01):
+def line_road_to_polyline(geometry, resolution=0.05):
     x1 = float(geometry.get("x"))
     y1 = float(geometry.get("y"))
     s = float(geometry.get("s"))
@@ -231,7 +232,7 @@ def line_road_to_polyline(geometry, resolution=0.01):
     return points
 
 
-def arc_road_to_polyline(geometry, curvature, resolution=0.01):
+def arc_road_to_polyline(geometry, curvature, resolution=0.05):
     x = float(geometry.get("x"))
     y = float(geometry.get("y"))
     s = float(geometry.get("s"))
@@ -281,8 +282,7 @@ def get_road_connections(road):
     predecessor = None
     if predecessor_data is not None:
         if predecessor_data.get("elementType") == "road":
-            contact_point = predecessor_data.get("contactPoint")
-            predecessor = f"{predecessor_data.get('elementId')}-{contact_point}"
+            predecessor = [ int(predecessor_data.get('elementId')), predecessor_data.get("contactPoint")]
         else:  # junction
             predecessor = int(predecessor_data.get('elementId'))
 
@@ -290,10 +290,8 @@ def get_road_connections(road):
     successor = None
     if successor_data is not None:
         if successor_data.get("elementType") == "road":
-            contact_point = successor_data.get("contactPoint")
-            successor = f"{successor_data.get('elementId')}-{successor_data.get('contactPoint')}"
+            successor = [int (successor_data.get('elementId')), successor_data.get("contactPoint")]
         else:  # junction
-            contact_point = "end"
             successor = int(successor_data.get('elementId'))
 
     return predecessor, successor
@@ -411,8 +409,8 @@ def construct_side_geometry(road, side="left", first_inner_edge=None):
                     if s >= lane_sections[lane_section_index + 1][0]:
                         break
 
-                x = geometry[index][1]
-                y = geometry[index][2]
+                # x = geometry[index][1]
+                # y = geometry[index][2]
                 heading = geometry[index][3]
 
                 width_index = 0
@@ -444,6 +442,12 @@ def construct_side_geometry(road, side="left", first_inner_edge=None):
                 inner_lane_edge[geometry_start_index:index, :] + outer_lane_edge[geometry_start_index:index, :]
             ) / 2
 
+            points = np.array([[s, x, y, heading] for s, x, y, heading in zip(geometry[geometry_start_index:index, 0],
+                                                                              centers[:,0],
+                                                                              centers[:,1],
+                                                                              geometry[geometry_start_index:index, 1])])
+
+
             lanes[lane_section_index][id] = {
                 "polygon": np.concatenate(
                     [
@@ -452,7 +456,7 @@ def construct_side_geometry(road, side="left", first_inner_edge=None):
                     ],
                     axis=0,
                 ),
-                "centers": centers,
+                "centers": points,
                 "road_type": lane_data["type"],
                 "predecessor": lane_data["predecessor"],
                 "successor": lane_data["successor"],
@@ -467,7 +471,7 @@ def construct_side_geometry(road, side="left", first_inner_edge=None):
     return lanes
 
 
-def construct_object_geometry(road):
+def construct_object_geometry(road, resolution=0.05):
     geometry = road["geometry"]
     objects_data = road["objects"]
 
@@ -495,17 +499,29 @@ def construct_object_geometry(road):
         corner_points = corner_points + np.array([center_x, center_y])
 
         # find the centerline points for the object
-        centers = np.array(
-            [
-                [center_x + 0.51 * length * np.cos(object_heading), center_y + 0.51 * length * np.sin(object_heading)],
-                [center_x - 0.51 * length * np.cos(object_heading), center_y - 0.51 * length * np.sin(object_heading)],
-            ]
-        )
+        x1 = center_x + 0.51 * length * np.cos(object_heading)
+        y1 = center_y + 0.51 * length * np.sin(object_heading)
+        x2 = center_x - 0.51 * length * np.cos(object_heading)
+        y2 = center_y - 0.51 * length * np.sin(object_heading)
+
+        # sample the object center to the requested step size
+        num_points = max( int(length / resolution), 10)  # at least 10 points
+        xs = np.linspace(x1, x2, num_points, endpoint=True)
+        ys = np.linspace(y1, y2, num_points, endpoint=True)
+
+        dx = xs[1:] - xs[:-1]
+        dy = ys[1:] - ys[:-1]
+        ds = np.zeros_like(xs)
+        ds[1:] = np.sqrt(dx**2 + dy**2)
+        cs = np.cumsum(ds)  # always starts at zero
+
+        centers = np.array([[s, x, y, object_heading] for s, x, y in zip(cs, xs, ys)])
 
         objects[object_data["id"]] = {
             "polygon": corner_points,
             "centers": centers,
             "road_type": object_data["type"],
+            "heading": object_heading,
         }
 
     return objects
@@ -537,25 +553,25 @@ def get_crosswalk_links( road_map, categories, objects, threshold=1 ):
                 for lane_section_id, lane_section in lanes.items():
                     for lane_id, lane in lane_section.items():
                         if lane['road_type'] in categories:
-                            if np.linalg.norm(object['centers'][0] - lane['centers'][0]) < threshold:
+                            if np.linalg.norm(object['centers'][0, 1:3] - lane['centers'][0,1:3]) < threshold:
                                 object_link_name = f"{object_id}-0"
-                                lane_link_name= f"{road_id}-0-{lane_id}"
+                                lane_link_name= f"{road_id}-{lane_section_id}-{lane_id}-0"
                                 insert_road_link(object_links, object_link_name, lane_link_name)
                                 insert_road_link(object_links, lane_link_name, object_link_name)
-                            elif np.linalg.norm(object['centers'][0] - lane['centers'][-1]) < threshold:
+                            elif np.linalg.norm(object['centers'][0, 1:3] - lane['centers'][-1,1:3]) < threshold:
                                 object_link_name = f"{object_id}-0"
-                                lane_link_name= f"{road_id}-{len(lane['centers'])-1}-{lane_id}"
+                                lane_link_name= f"{road_id}-{lane_section_id}-{lane_id}-{len(lane['centers'])-1}"
                                 insert_road_link(object_links, object_link_name, lane_link_name)
                                 insert_road_link(object_links, lane_link_name, object_link_name)
 
-                            if np.linalg.norm(object['centers'][-1] - lane['centers'][0]) < threshold:
+                            if np.linalg.norm(object['centers'][-1,1:3] - lane['centers'][0,1:3]) < threshold:
                                 object_link_name = f"{object_id}-{len(object['centers'])-1}"
-                                lane_link_name= f"{road_id}-0-{lane_id}"
+                                lane_link_name= f"{road_id}-{lane_section_id}-{lane_id}-0"
                                 insert_road_link(object_links, object_link_name, lane_link_name)
                                 insert_road_link(object_links, lane_link_name, object_link_name)
-                            elif np.linalg.norm(object['centers'][-1] - lane['centers'][-1]) < threshold:
+                            elif np.linalg.norm(object['centers'][-1,1:3] - lane['centers'][-1, 1:3]) < threshold:
                                 object_link_name = f"{object_id}-{len(object['centers'])-1}"
-                                lane_link_name= f"{road_id}-{len(lane['centers'])-1}-{lane_id}"
+                                lane_link_name= f"{road_id}-{lane_section_id}-{lane_id}-{len(lane['centers'])-1}"
                                 insert_road_link(object_links, object_link_name, lane_link_name)
                                 insert_road_link(object_links, lane_link_name, object_link_name)
     return object_links
@@ -656,46 +672,44 @@ def main():
 
                 # build the road connections map
                 if lane["predecessor"] is not None:
+                    link_name = f"{road_id}-{lane_section_id}-{lane_id}-0"
                     if not lane_section_id:
                         if road["predecessor"] is not None:
                             # there is a predecessor road and this is the first road section
-                            link_name = f"{road_id}-0-{lane_id}"
-                            insert_road_link(
-                                backward_road_links, link_name, f"{road['predecessor']}-{lane['predecessor']}"
-                            )
+                            predecessor_name = f"{road['predecessor'][0]}-{road['predecessor'][1]}-{lane['predecessor']}-{road['predecessor'][1]}"
+                            insert_road_link( backward_road_links, link_name, predecessor_name )
                     else:
-                        link_name = f"{road_id}-0-{lane_id}-{lane_section_id}"
-                        insert_road_link(backward_road_links, link_name, f"{road_id}-{len(lane['centers'])-1}-{lane['predecessor']}-{lane_section_id-1}")
+                        predecessor_name = f"{road_id}-{lane_section_id-1}-{lane['predecessor']}-end"
+                        insert_road_link(backward_road_links, link_name, predecessor_name)
 
                 if lane["successor"] is not None:
+                    link_name = f"{road_id}-{lane_section_id}-{lane_id}-{len(lane['centers'])-1}"
                     if lane_section_id == len(lanes) - 1:
                         if road["successor"] is not None:
                             # there is a successor road and this is the last road section
-                            link_name = f"{road_id}-{len(lane['centers'])-1}-{lane_id}"
-                            insert_road_link(forward_road_links, link_name, f"{road['successor']}-{lane['successor']}")
+                            successor_name = f"{road['successor'][0]}-{road['successor'][1]}-{lane['successor']}-{road['successor'][1]}"
+                            insert_road_link( backward_road_links, link_name, successor_name )
                     else:
-                        link_name = f"{road_id}-{len(lane['centers'])-1}-{lane_id}-{lane_section_id}"
-                        insert_road_link(forward_road_links, link_name, f"{road_id}-0-{lane['successor']}-{lane_section_id+1}")
+                        successor_name = f"{road_id}-{lane_section_id+1}-{lane['successor']}-0"
+                        insert_road_link(backward_road_links, link_name, successor_name)
 
         for object_id, object in objects.items():
             object_map[object_id] = object
             polygons.append(object["polygon"])
             road_types.append(object["road_type"])
 
-    # draw the centerlines for 'sidewalk' roads and 'crosswalk' objects
-    centers_img = np.zeros((map_height, map_width, 3), np.uint8)
-    for road_id, lanes in road_map.items():
-        for lane_section_id, lane_section in lanes.items():
-            for lane_id, lane in lane_section.items():
-                if lane["road_type"] == "sidewalk":
-                    draw_road_polyline(centers_img, lane["centers"], map_origin, args.resolution)
-
-    for object_id, object in object_map.items():
-        if object["road_type"] == "crosswalk":
-            draw_road_polyline(centers_img, object["centers"], map_origin, args.resolution, colour=(0, 255, 0))
-
-    filename = os.path.join(args.output, f"{prefix}{args.town}_sidewalks.png")
-    cv2.imwrite(filename, centers_img)
+    # # draw the centerlines for 'sidewalk' roads and 'crosswalk' objects
+    # centers_img = np.zeros((map_height, map_width, 3), np.uint8)
+    # for road_id, lanes in road_map.items():
+    #     for lane_section_id, lane_section in lanes.items():
+    #         for lane_id, lane in lane_section.items():
+    #             if lane["road_type"] == "sidewalk":
+    #                 draw_road_polyline(centers_img, lane["centers"][:, 1:3], map_origin, args.resolution)
+    # for object_id, object in object_map.items():
+    #     if object["road_type"] == "crosswalk":
+    #         draw_road_polyline(centers_img, object["centers"][:,1:3], map_origin, args.resolution, colour=(0, 255, 0))
+    # filename = os.path.join(args.output, f"{prefix}{args.town}_sidewalks.png")
+    # cv2.imwrite(filename, centers_img)
 
     # get the object links
     object_links = get_crosswalk_links(road_map, ["sidewalk"], object_map, threshold=2.5)
@@ -776,6 +790,16 @@ def main():
     }
     with open(os.path.join(args.output, f"{prefix}{args.town}_map_parameters.json"), "w") as f:
         json.dump(parameters, f, indent=2)
+
+    # write out the road map to a file adding the object links
+    world_map = {
+        "roads": road_map,
+        "forward_road_links": forward_road_links,
+        "backward_road_links": backward_road_links,
+        "object_links": object_links,
+    }
+    with open(os.path.join(args.output, f"{prefix}{args.town}_links.dill"), "wb") as f:
+        dill.dump(world_map, f)
 
     print("done")
 
